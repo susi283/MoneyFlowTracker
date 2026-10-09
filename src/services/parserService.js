@@ -110,15 +110,17 @@ function extractPerson(text, type) {
   return null;
 }
 
+
 function detectCategory(text) {
-  const lower = text.toLowerCase();
   for (const [category, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
-    if (keywords.some((kw) => lower.includes(kw))) {
+    if (matchKeywords(text, keywords)) {
       return category;
     }
   }
+
   return null;
 }
+
 
 function detectType(text) {
   const lower = text.toLowerCase().replace(/[₹,]/g, ' ');
