@@ -36,6 +36,31 @@ export function findNegativeLentBorrowedBalance(transactions, affectedPeople) {
   )) || null;
 }
 
+export function validateLedgerChange(transactions, candidate, excludeId) {
+  const existing = excludeId
+    ? transactions.find((transaction) => transaction.id === excludeId)
+    : null;
+  const candidateTransactions = transactions.filter((transaction) => transaction.id !== excludeId);
+  if (candidate) candidateTransactions.push(candidate);
+
+  const affectedPeople = new Map();
+  for (const transaction of [candidate, existing]) {
+    const group = transaction && getLedgerGroup(transaction.type);
+    const person = transaction?.person?.trim();
+    if (!group || !person) continue;
+    affectedPeople.set(`${group}:${person.toLocaleLowerCase()}`, { group, person });
+  }
+
+  const negativeBalance = findNegativeLentBorrowedBalance(candidateTransactions, [...affectedPeople.values()]);
+  if (negativeBalance) {
+    return {
+      success: false,
+      errors: [`This change exceeds ${negativeBalance.person}'s outstanding ${negativeBalance.group} balance.`],
+    };
+  }
+  return { success: true, errors: [] };
+}
+
 export function getLentBorrowedLedger(transactions) {
   const lentMap = new Map();
   const borrowedMap = new Map();

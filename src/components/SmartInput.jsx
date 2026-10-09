@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Send, Loader2, AlertCircle, CheckCircle2, Edit3 } from 'lucide-react';
 import { parseNaturalInput } from '../services/parserService';
-import { getTodayStr, getTypeLabel } from '../utils/helpers';
+import { getTypeLabel } from '../utils/helpers';
 import TransactionForm from './TransactionForm';
 
 export default function SmartInput({ onAdd, categories }) {
@@ -12,6 +12,7 @@ export default function SmartInput({ onAdd, categories }) {
   const [showManual, setShowManual] = useState(false);
   const [clarification, setClarification] = useState('');
   const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   function handleSubmit(e) {
     e.preventDefault();
@@ -62,17 +63,26 @@ export default function SmartInput({ onAdd, categories }) {
   }
 
   async function handleConfirm() {
-    if (!parsed) return;
-    const result = await onAdd(parsed);
-    if (result.success) {
-      setText('');
-      setParsed(null);
-      setStatus('success');
-      setMessage('Transaction added successfully!');
-      setTimeout(() => { setStatus(null); setMessage(''); }, 2500);
-    } else {
+    if (!parsed || submitting) return;
+    setSubmitting(true);
+    try {
+      const result = await onAdd(parsed);
+      if (result.success) {
+        setText('');
+        setParsed(null);
+        setStatus('success');
+        setMessage('Transaction added successfully!');
+        setTimeout(() => { setStatus(null); setMessage(''); }, 2500);
+      } else {
+        setStatus('error');
+        setMessage(result.errors?.join(', ') || 'Failed to add transaction.');
+      }
+    } catch (error) {
+      console.error('Failed to add parsed transaction:', error);
       setStatus('error');
-      setMessage(result.errors?.join(', ') || 'Failed to add transaction.');
+      setMessage('Unable to add the transaction. Check your connection and try again.');
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -193,8 +203,9 @@ export default function SmartInput({ onAdd, categories }) {
             </div>
           </div>
           <div className="flex gap-2">
-            <button onClick={handleConfirm} className="btn-primary flex items-center gap-2">
-              <CheckCircle2 size={16} /> Confirm & Add
+            <button onClick={handleConfirm} disabled={submitting} className="btn-primary flex items-center gap-2 disabled:opacity-50">
+              {submitting ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
+              {submitting ? 'Adding...' : 'Confirm & Add'}
             </button>
             <button onClick={handleCancel} className="btn-secondary">Cancel</button>
           </div>

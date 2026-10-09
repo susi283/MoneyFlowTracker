@@ -14,7 +14,7 @@ const EXPENSE_KEYWORDS = [
 
 const INCOME_KEYWORDS = [
   'got', 'received', 'get', 'earned', 'earn', 'income', 'salary', 'credited',
-  'from', 'gained', 'deposited',
+  'gained', 'deposited',
 ];
 
 const BORROWED_KEYWORDS = [
@@ -39,15 +39,19 @@ const CATEGORY_KEYWORDS = {
 };
 
 function matchKeywords(text, keywords) {
-  const lower = text.toLowerCase();
-  return keywords.some((kw) => lower.includes(kw.toLowerCase()));
+  return keywords.some((keyword) => (
+    new RegExp(`(^|[^\\p{L}\\p{N}])${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^\\p{L}\\p{N}])`, 'iu')
+      .test(text)
+  ));
 }
 
 function extractAmount(text) {
-  // Match patterns like: 200, ₹200, Rs 200, Rs. 200, 1,000, 1000.50
-  const match = text.match(/(?:₹|rs\.?\s*)?(\d+(?:,\d+)*(?:\.\d+)?)/i);
+  const match = text.match(/(?<![\p{L}\d.,])(-?\s*(?:₹\s*|rs\.?\s*)?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)(?![\d.,])/iu);
   if (match) {
-    return parseFloat(match[1].replace(/,/g, ''));
+    const token = match[1].trim();
+    if (token.startsWith('-')) return null;
+    const amount = Number(token.replace(/[₹,\s]/g, '').replace(/^rs\.?/i, ''));
+    return Number.isFinite(amount) && amount > 0 ? amount : null;
   }
   return null;
 }
@@ -66,7 +70,7 @@ function extractPerson(text, type) {
   const patterns = type === 'borrowed_repaid'
     ? [
       new RegExp(`^(?:i\\s+)?(?:gave\\s+back|paid\\s+back|returned)\\s+(?:to\\s+)?${PERSON_PATTERN}$`, 'iu'),
-      new RegExp(`^(?:i\\s+)?repaid\\s+${PERSON_PATTERN}$`, 'iu'),
+      new RegExp(`^(?:i\\s+)?repaid\\s+(?:to\\s+)?${PERSON_PATTERN}$`, 'iu'),
       new RegExp(`^(?:i\\s+)?(?:gave\\s+back|paid\\s+back|returned)\\s+${MONEY_PATTERN}\\s+to\\s+${PERSON_PATTERN}$`, 'iu'),
       new RegExp(`^(?:i\\s+)?repaid\\s+${PERSON_PATTERN}\\s+${MONEY_PATTERN}$`, 'iu'),
     ]
@@ -119,11 +123,11 @@ function detectCategory(text) {
 function detectType(text) {
   const lower = text.toLowerCase().replace(/[₹,]/g, ' ');
 
-  if (/\b(?:i\s+)?(?:gave\s+back|paid\s+back|returned)\b.*\bto\b/.test(lower)
-    || /\b(?:i\s+)?repaid\s+[\p{L}]/u.test(lower)) {
+  if (/^(?:i\s+)?(?:gave\s+back|paid\s+back|returned)\b.*\bto\b/.test(lower)
+    || /^(?:i\s+)?repaid\b/u.test(lower)) {
     return 'borrowed_repaid';
   }
-  if (/^[\p{L}][\p{L} .'-]*\s+(?:gave\s+back|returned|repaid)\b/u.test(lower)
+  if (/^(?!i\b)[\p{L}][\p{L} .'-]*\s+(?:gave\s+back|returned|repaid)\b/u.test(lower)
     || /\b(?:got|received)\b.*\bback\s+from\b/.test(lower)
     || /\b(?:got|received)\s+.+\s+from\b/.test(lower) && /\bback\b/.test(lower)) {
     return 'lent_returned';
@@ -135,10 +139,13 @@ function detectType(text) {
   if (/\b(?:i\s+)?(?:gave|give|lent|lend|loaned|loan)\b/.test(lower)) {
     return 'lent';
   }
-  if (matchKeywords(lower, INCOME_KEYWORDS)) {
+  const isIncome = matchKeywords(lower, INCOME_KEYWORDS);
+  const isExpense = matchKeywords(lower, EXPENSE_KEYWORDS);
+  if (isIncome && isExpense) return null;
+  if (isIncome) {
     return 'income';
   }
-  if (matchKeywords(lower, EXPENSE_KEYWORDS)) {
+  if (isExpense) {
     return 'expense';
   }
 

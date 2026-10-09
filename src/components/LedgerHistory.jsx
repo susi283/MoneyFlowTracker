@@ -6,29 +6,48 @@ const PAGE_SIZE = 20;
 
 export default function LedgerHistory({ userId, types, revision, title }) {
   const [page, setPage] = useState(1);
-  const [rows, setRows] = useState([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [historyState, setHistoryState] = useState({
+    key: '',
+    rows: [],
+    total: 0,
+    loading: true,
+    error: '',
+  });
+  const requestKey = JSON.stringify([userId, types, page, revision, title]);
+  const currentHistory = historyState.key === requestKey ? historyState : null;
+  const rows = currentHistory?.rows || [];
+  const total = currentHistory?.total || 0;
+  const loading = !currentHistory || currentHistory.loading;
+  const error = currentHistory?.error || '';
 
   useEffect(() => {
     let active = true;
-    setLoading(true);
     transactionService.getHistoryPage(userId, { page, pageSize: PAGE_SIZE, types })
       .then((result) => {
         if (!active) return;
-        setRows(result.transactions);
-        setTotal(result.total);
-        setError('');
+        setHistoryState({
+          key: requestKey,
+          rows: result.transactions,
+          total: result.total,
+          loading: false,
+          error: '',
+        });
       })
       .catch((err) => {
         console.error(`Failed to load ${title.toLowerCase()}:`, err);
-        if (active) setError(`Unable to load ${title.toLowerCase()}.`);
-      })
-      .finally(() => { if (active) setLoading(false); });
+        if (active) {
+          setHistoryState({
+            key: requestKey,
+            rows: [],
+            total: 0,
+            loading: false,
+            error: `Unable to load ${title.toLowerCase()}.`,
+          });
+        }
+      });
 
     return () => { active = false; };
-  }, [page, revision, title, types, userId]);
+  }, [page, revision, title, types, userId, requestKey]);
 
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 

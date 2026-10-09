@@ -1,48 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { Plus, Search, X, Pencil, Trash2 } from 'lucide-react';
-import {
-  formatCurrency, formatDate, getTypeLabel, getTypeBadgeClass, getTodayStr,
-} from '../utils/helpers';
+import { formatCurrency, formatDate, getTypeLabel, getTypeBadgeClass } from '../utils/helpers';
 import TransactionForm from '../components/TransactionForm';
 import { transactionService } from '../services/transactionService';
 
 const PAGE_SIZE = 20;
-
-function optimisticRecord(data, original = {}) {
-  return {
-    ...original,
-    id: original.id || `pending-${globalThis.crypto?.randomUUID?.() || Date.now()}`,
-    type: data.type,
-    amount: Number(data.amount),
-    category: data.category || 'Other',
-    description: data.description?.trim() || '',
-    person: data.person?.trim() || '',
-    date: data.date || getTodayStr(),
-    paymentMethod: data.paymentMethod || 'Cash',
-    status: data.status || 'completed',
-    createdAt: original.createdAt || new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
-}
-
-function matchesFilters(transaction, { type, category, month, search }) {
-  if (type && transaction.type !== type) return false;
-  if (category && transaction.category !== category) return false;
-  if (month && !transaction.date?.startsWith(month)) return false;
-  if (search) {
-    const query = search.toLowerCase();
-    return [transaction.description, transaction.person, transaction.category, String(transaction.amount)]
-      .some((value) => String(value || '').toLowerCase().includes(query));
-  }
-  return true;
-}
-
-function sortHistory(rows) {
-  return rows.sort((a, b) => {
-    const dateDiff = new Date(`${b.date}T00:00:00`) - new Date(`${a.date}T00:00:00`);
-    return dateDiff || new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
-  });
-}
 
 const ALL_TYPES = [
   { value: '', label: 'All Types' },
@@ -66,11 +28,22 @@ export default function TransactionsPage({
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [formError, setFormError] = useState('');
   const [formSuccess, setFormSuccess] = useState('');
-  const [transactions, setTransactions] = useState([]);
-  const [total, setTotal] = useState(0);
+  const [historyState, setHistoryState] = useState({
+    key: '',
+    transactions: [],
+    total: 0,
+    loading: true,
+    error: '',
+  });
   const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState('');
+  const requestKey = JSON.stringify([
+    userId, page, filterType, filterCategory, filterMonth, search, revision,
+  ]);
+  const currentHistory = historyState.key === requestKey ? historyState : null;
+  const transactions = currentHistory?.transactions || [];
+  const total = currentHistory?.total || 0;
+  const loading = !currentHistory || currentHistory.loading;
+  const loadError = currentHistory?.error || '';
   const months = availableMonths;
   const allCats = [...new Set([
     ...(categories?.expense || []),
@@ -80,8 +53,6 @@ export default function TransactionsPage({
 
   useEffect(() => {
     let active = true;
-    setLoading(true);
-    setLoadError('');
     const timer = setTimeout(() => {
       transactionService.getHistoryPage(userId, {
         page,
@@ -92,121 +63,81 @@ export default function TransactionsPage({
         search,
       }).then((result) => {
         if (!active) return;
-        setTransactions(result.transactions);
-        setTotal(result.total);
+        setHistoryState({
+          key: requestKey,
+          transactions: result.transactions,
+          total: result.total,
+          loading: false,
+          error: '',
+        });
       }).catch((err) => {
         console.error('Failed to load transaction history:', err);
-        if (active) setLoadError('Unable to load transactions.');
-      }).finally(() => { if (active) setLoading(false); });
+        if (active) {
+          setHistoryState({
+            key: requestKey,
+            transactions: [],
+            total: 0,
+            loading: false,
+            error: 'Unable to load transactions.',
+          });
+        }
+      });
     }, search ? 250 : 0);
 
     return () => {
       active = false;
       clearTimeout(timer);
     };
-  }, [userId, page, filterType, filterCategory, filterMonth, search, revision]);
+  }, [userId, page, filterType, filterCategory, filterMonth, search, revision, requestKey]);
 
   async function handleAdd(data) {
     setFormError('');
-    const optimistic = optimisticRecord(data);
-    const filters = { type: filterType, category: filterCategory, month: filterMonth, search };
-    const matches = matchesFilters(optimistic, filters);
-    if (matches) {
-      if (page === 1) setTransactions((current) => sortHistory([optimistic, ...current]).slice(0, PAGE_SIZE));
-      setTotal((current) => current + 1);
-    }
-    setShowForm(false);
-    setFormSuccess('Transaction added!');
-    const resultPromise = onAdd(data);
-    resultPromise.then((result) => {
+    try {
+      const result = await onAdd(data);
       if (result.success) {
-        setTransactions((current) => sortHistory(current.map((transaction) => (
-          transaction.id === optimistic.id ? result.transaction : transaction
-        ))));
+        setShowForm(false);
         setFormSuccess('Transaction added!');
         setTimeout(() => setFormSuccess(''), 3000);
-        return;
+      } else {
+        setFormError(result.errors?.join(', ') || 'Failed to add.');
       }
-      setTransactions((current) => current.filter((transaction) => transaction.id !== optimistic.id));
-      if (matches) setTotal((current) => Math.max(0, current - 1));
-      setFormSuccess('');
-      setFormError(result.errors?.join(', ') || 'Failed to add.');
-      setShowForm(true);
-    }).catch((err) => {
-      setTransactions((current) => current.filter((transaction) => transaction.id !== optimistic.id));
-      if (matches) setTotal((current) => Math.max(0, current - 1));
-      setFormSuccess('');
+      return result;
+    } catch (err) {
       setFormError(err.message || 'Failed to add.');
-      setShowForm(true);
-    });
-    const result = await resultPromise;
-    return result;
+      return { success: false, errors: [err.message || 'Failed to add.'] };
+    }
   }
 
   async function handleUpdate(data) {
     setFormError('');
     const original = editingTxn;
-    const optimistic = optimisticRecord(data, original);
-    const filters = { type: filterType, category: filterCategory, month: filterMonth, search };
-    const oldMatch = matchesFilters(original, filters);
-    const newMatch = matchesFilters(optimistic, filters);
-    setTransactions((current) => {
-      const updated = current.filter((transaction) => transaction.id !== original.id);
-      if (newMatch) updated.unshift(optimistic);
-      return sortHistory(updated).slice(0, PAGE_SIZE);
-    });
-    if (oldMatch !== newMatch) setTotal((current) => Math.max(0, current + (newMatch ? 1 : -1)));
-    setEditingTxn(null);
-    setFormSuccess('Transaction updated!');
-    const resultPromise = onUpdate(original.id, data);
-    resultPromise.then((result) => {
+    try {
+      const result = await onUpdate(original.id, data);
       if (result.success) {
-        setTransactions((current) => sortHistory(current.map((transaction) => (
-          transaction.id === original.id ? result.transaction : transaction
-        ))));
+        setEditingTxn(null);
         setFormSuccess('Transaction updated!');
         setTimeout(() => setFormSuccess(''), 3000);
-        return;
+      } else {
+        setFormError(result.errors?.join(', ') || 'Failed to update.');
       }
-      setTransactions((current) => {
-        const updated = current.filter((transaction) => transaction.id !== original.id);
-        if (oldMatch) updated.unshift(original);
-        return sortHistory(updated).slice(0, PAGE_SIZE);
-      });
-      if (oldMatch !== newMatch) setTotal((current) => Math.max(0, current + (oldMatch ? 1 : -1)));
-      setFormSuccess('');
-      setFormError(result.errors?.join(', ') || 'Failed to update.');
-      setEditingTxn(original);
-    }).catch((err) => {
-      setTransactions((current) => {
-        const updated = current.filter((transaction) => transaction.id !== original.id);
-        if (oldMatch) updated.unshift(original);
-        return sortHistory(updated).slice(0, PAGE_SIZE);
-      });
-      if (oldMatch !== newMatch) setTotal((current) => Math.max(0, current + (oldMatch ? 1 : -1)));
-      setFormSuccess('');
+      return result;
+    } catch (err) {
       setFormError(err.message || 'Failed to update.');
-      setEditingTxn(original);
-    });
-    const result = await resultPromise;
-    return result;
+      return { success: false, errors: [err.message || 'Failed to update.'] };
+    }
   }
 
   async function handleDelete(id) {
-    const original = transactions.find((transaction) => transaction.id === id);
-    const filters = { type: filterType, category: filterCategory, month: filterMonth, search };
-    if (original) {
-      setTransactions((current) => current.filter((transaction) => transaction.id !== id));
-      setTotal((current) => Math.max(0, current - 1));
-    }
     setDeleteConfirm(null);
-    const result = await onDelete(id);
-    if (!result.success && original) {
-      setTransactions((current) => [original, ...current].slice(0, PAGE_SIZE));
-      if (matchesFilters(original, filters)) setTotal((current) => current + 1);
-      setFormError(result.errors?.join(', ') || 'Failed to delete.');
-    } else if (result.success && page > 1 && total - 1 <= (page - 1) * PAGE_SIZE) {
-      setPage(Math.max(1, Math.ceil((total - 1) / PAGE_SIZE)));
+    setFormError('');
+    try {
+      const result = await onDelete(id);
+      if (!result.success) setFormError(result.errors?.join(', ') || 'Failed to delete.');
+      else if (page > 1 && total - 1 <= (page - 1) * PAGE_SIZE) {
+        setPage(Math.max(1, Math.ceil((total - 1) / PAGE_SIZE)));
+      }
+    } catch (err) {
+      setFormError(err.message || 'Failed to delete.');
     }
   }
 

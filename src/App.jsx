@@ -23,35 +23,28 @@ function isPasswordRecoveryRedirect() {
   return searchParams.get('type') === 'recovery' || hashParams.get('type') === 'recovery';
 }
 
-let initialSessionRequest;
-
-function getInitialSession() {
-  if (!initialSessionRequest) initialSessionRequest = supabase.auth.getSession();
-  return initialSessionRequest;
-}
-
 export default function App() {
   const [session, setSession] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState('');
   const [passwordRecovery, setPasswordRecovery] = useState(isPasswordRecoveryRedirect);
   const [showIntro, setShowIntro] = useState(() => !isPasswordRecoveryRedirect());
   const [activePage, setActivePage] = useState('dashboard');
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [signOutError, setSignOutError] = useState('');
   const [categoryState, setCategoryState] = useState({ userId: null, categories: EMPTY_CATEGORIES });
+  const [categoryErrorState, setCategoryErrorState] = useState({ userId: null, message: '' });
   const categoryVersionRef = useRef(0);
 
   useEffect(() => {
     let mounted = true;
-
-    getInitialSession().then(({ data }) => {
-      if (mounted) {
-        setSession(data.session);
-        setAuthLoading(false);
-      }
-    });
+    let authEventReceived = false;
 
     const { data: listener } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      authEventReceived = true;
+      if (!mounted) return;
       setSession(nextSession);
+      setAuthError('');
       setAuthLoading(false);
 
       if (event === 'PASSWORD_RECOVERY') {
@@ -60,6 +53,24 @@ export default function App() {
       } else if (event === 'SIGNED_OUT') {
         setPasswordRecovery(false);
       }
+    });
+
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (!mounted || authEventReceived) return;
+      if (error) {
+        console.error('Failed to restore authentication session:', error);
+        setAuthError('Could not restore your session. Please sign in again.');
+        setShowIntro(false);
+      } else {
+        setSession(data.session);
+      }
+      setAuthLoading(false);
+    }).catch((error) => {
+      if (!mounted || authEventReceived) return;
+      console.error('Failed to restore authentication session:', error);
+      setAuthError('Could not restore your session. Please sign in again.');
+      setShowIntro(false);
+      setAuthLoading(false);
     });
 
     return () => {
@@ -71,6 +82,7 @@ export default function App() {
   const user = session?.user || null;
   const userId = user?.id;
   const categories = categoryState.userId === userId ? categoryState.categories : EMPTY_CATEGORIES;
+  const categoryError = categoryErrorState.userId === userId ? categoryErrorState.message : '';
 
   useEffect(() => {
     if (!userId) return undefined;
@@ -81,9 +93,18 @@ export default function App() {
       .then((data) => {
         if (active && version === categoryVersionRef.current) {
           setCategoryState({ userId, categories: data });
+          setCategoryErrorState({ userId, message: '' });
         }
       })
-      .catch((err) => console.error('Failed to load categories:', err));
+      .catch((err) => {
+        console.error('Failed to load categories:', err);
+        if (active) {
+          setCategoryErrorState({
+            userId,
+            message: 'Unable to load categories. Default categories remain available.',
+          });
+        }
+      });
 
     return () => { active = false; };
   }, [userId]);
@@ -95,6 +116,7 @@ export default function App() {
     revision,
     summary,
     ledger,
+    loadError: transactionLoadError,
     addTransaction,
     updateTransaction,
     deleteTransaction,
@@ -120,27 +142,34 @@ export default function App() {
 
   if (!session) {
     if (showIntro) return <IntroPage onComplete={() => setShowIntro(false)} />;
-    return <AuthPage />;
+    return <AuthPage initialError={authError} />;
   }
 
   async function signOut() {
-    await supabase.auth.signOut();
+    setSignOutError('');
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
+    } catch (error) {
+      console.error('Failed to sign out:', error);
+      setSignOutError('Unable to sign out. Please check your connection and try again.');
+    }
   }
 
   function renderPage() {
     switch (activePage) {
       case 'dashboard':
-        return <Dashboard transactions={transactions} metricsRows={metricsRows} availableMonths={availableMonths} summary={summary} ledger={ledger} onAdd={addTransaction} onReset={resetTransactions} categories={categories} />;
+        return <Dashboard key={userId} transactions={transactions} metricsRows={metricsRows} availableMonths={availableMonths} summary={summary} ledger={ledger} onAdd={addTransaction} onReset={resetTransactions} categories={categories} loadError={transactionLoadError} />;
       case 'transactions':
-        return <TransactionsPage userId={userId} availableMonths={availableMonths} revision={revision} onAdd={addTransaction} onUpdate={updateTransaction} onDelete={deleteTransaction} categories={categories} />;
+        return <TransactionsPage key={userId} userId={userId} availableMonths={availableMonths} revision={revision} onAdd={addTransaction} onUpdate={updateTransaction} onDelete={deleteTransaction} categories={categories} />;
       case 'lent':
-        return <LentPage userId={userId} ledger={ledger} onAddTransaction={addTransaction} revision={revision} />;
+        return <LentPage key={userId} userId={userId} ledger={ledger} onAddTransaction={addTransaction} revision={revision} />;
       case 'borrowed':
-        return <BorrowedPage userId={userId} ledger={ledger} onAddTransaction={addTransaction} revision={revision} />;
+        return <BorrowedPage key={userId} userId={userId} ledger={ledger} onAddTransaction={addTransaction} revision={revision} />;
       case 'reports':
-        return <ReportsPage userId={userId} availableMonths={availableMonths} revision={revision} />;
+        return <ReportsPage key={userId} userId={userId} availableMonths={availableMonths} revision={revision} />;
       case 'categories':
-        return <CategoriesPage userId={userId} categories={categories} onCategoriesChange={refreshCategories} />;
+        return <CategoriesPage key={userId} userId={userId} categories={categories} loadError={categoryError} onCategoriesChange={refreshCategories} />;
       case 'settings':
         return <SettingsPage onResetData={resetTransactions} />;
       default:
@@ -168,6 +197,7 @@ export default function App() {
             <LogOut size={14} /> Sign out
           </button>
         </div>
+        {signOutError && <p role="alert" className="px-4 py-2 text-right text-xs text-red-600">{signOutError}</p>}
 
         <main className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 lg:px-8">
           <div className="max-w-4xl mx-auto">

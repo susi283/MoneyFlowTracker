@@ -2,27 +2,6 @@ import React from 'react';
 import { TrendingUp, TrendingDown, Wallet } from 'lucide-react';
 import { formatCurrency } from '../utils/helpers';
 
-function SummaryCard({ title, amount, icon: Icon, color, bgColor, subtitle }) {
-  return (
-    <div className={`card ${bgColor} border-0`}>
-      <div className="flex items-start justify-between">
-        <div className="flex-1">
-          <p className={`text-sm font-semibold ${color} opacity-80 mb-1`}>{title}</p>
-          <p className={`text-2xl font-bold ${color} leading-tight`}>
-            {formatCurrency(amount)}
-          </p>
-          {subtitle && (
-            <p className={`text-xs mt-1 ${color} opacity-60`}>{subtitle}</p>
-          )}
-        </div>
-        <div className={`w-10 h-10 rounded-xl flex items-center justify-center opacity-20 bg-current`}>
-          <Icon size={22} className={color} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export default function SummaryCards({ summary }) {
   const {
     balance = 0,

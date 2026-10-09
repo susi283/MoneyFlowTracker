@@ -3,12 +3,24 @@ import { Trash2, Database, Info } from 'lucide-react';
 
 export default function SettingsPage({ onResetData }) {
   const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
 
   async function handleClearAll() {
     if (window.confirm('This will erase ALL your cloud transactions permanently. Are you sure?')) {
-      await onResetData([]);
-      setMessage('All transactions have been cleared.');
-      setTimeout(() => setMessage(''), 4000);
+      setBusy(true);
+      setError('');
+      setMessage('');
+      try {
+        await onResetData();
+        setMessage('All transactions have been cleared.');
+        setTimeout(() => setMessage(''), 4000);
+      } catch (err) {
+        console.error('Failed to clear transactions:', err);
+        setError('Unable to clear transactions. Check your connection and database permissions, then try again.');
+      } finally {
+        setBusy(false);
+      }
     }
   }
 
@@ -19,6 +31,11 @@ export default function SettingsPage({ onResetData }) {
       {message && (
         <div className="p-3 bg-green-50 border border-green-200 rounded-xl text-sm text-green-700 font-medium">
           {message}
+        </div>
+      )}
+      {error && (
+        <div role="alert" className="p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700 font-medium">
+          {error}
         </div>
       )}
 
@@ -54,14 +71,15 @@ export default function SettingsPage({ onResetData }) {
               <div>
                 <p className="font-semibold text-red-700">Clear All Data</p>
                 <p className="text-sm text-red-500 mt-1">
-                  Permanently delete all transactions and settings. This cannot be undone.
+                  Permanently delete all transactions. Your categories and account settings are not changed.
                 </p>
               </div>
               <button
                 onClick={handleClearAll}
+                disabled={busy}
                 className="btn-danger flex items-center gap-2 whitespace-nowrap flex-shrink-0"
               >
-                <Trash2 size={16} /> Clear All
+                <Trash2 size={16} /> {busy ? 'Clearing...' : 'Clear All'}
               </button>
             </div>
           </div>

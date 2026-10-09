@@ -1,10 +1,18 @@
 import { supabase } from '../lib/supabase';
-import { getTransactionCashImpactCents } from '../utils/helpers';
-import { findNegativeLentBorrowedBalance, getLentBorrowedLedger } from '../utils/ledger';
+import {
+  calculateBalance,
+  getCategoryBreakdown,
+  getMonthlyReport,
+  getSummary,
+} from '../utils/finance';
+import { getLentBorrowedLedger, validateLedgerChange } from '../utils/ledger';
+import { fetchAllPages } from '../utils/pagination';
 
 const PERSON_TYPES = ['lent', 'borrowed', 'lent_returned', 'borrowed_repaid'];
+const TRANSACTION_TYPES = ['income', 'expense', ...PERSON_TYPES];
 const TRANSACTION_COLUMNS = 'id, type, amount, category, description, person, transaction_date, payment_method, status, created_at, updated_at, related_transaction_id';
 const pendingQueries = new Map();
+const METRICS_PAGE_SIZE = 1000;
 
 function dedupeRequest(key, request) {
   if (pendingQueries.has(key)) return pendingQueries.get(key);
@@ -34,22 +42,25 @@ function getMonthEnd(month) {
   return new Date(Date.UTC(year, monthNumber, 0)).toISOString().slice(0, 10);
 }
 
-function toCents(amount) {
-  return Math.round((Number(amount) || 0) * 100);
-}
-
-function fromCents(amount) {
-  return amount / 100;
-}
-
 function validateTransaction(data) {
   const errors = [];
-  if (!data.type) errors.push('Transaction type is required');
-  if (!data.amount || isNaN(Number(data.amount)) || Number(data.amount) <= 0) {
+  if (!data || typeof data !== 'object') {
+    return ['Transaction details are required'];
+  }
+  if (!TRANSACTION_TYPES.includes(data.type)) errors.push('A valid transaction type is required');
+  const amount = Number(data.amount);
+  const cents = Math.round(amount * 100);
+  if (!Number.isFinite(amount) || !Number.isSafeInteger(cents)
+    || amount <= 0 || cents <= 0 || Math.abs(amount * 100 - cents) >= 1e-7) {
     errors.push('A valid positive amount is required');
   }
-  if (!data.date) errors.push('Date is required');
-  if (PERSON_TYPES.includes(data.type) && !data.person?.trim()) {
+  const parsedDate = /^\d{4}-\d{2}-\d{2}$/.test(data.date || '')
+    ? Date.parse(`${data.date}T00:00:00Z`)
+    : NaN;
+  if (!Number.isFinite(parsedDate) || new Date(parsedDate).toISOString().slice(0, 10) !== data.date) {
+    errors.push('A valid date is required');
+  }
+  if (PERSON_TYPES.includes(data.type) && (typeof data.person !== 'string' || !data.person.trim())) {
     errors.push('Person name is required for this transaction type');
   }
   return errors;
@@ -63,41 +74,25 @@ function ledgerGroup(type) {
 
 async function validateLedgerBalance(userId, data, excludeId) {
   const relevantTypes = ['lent', 'lent_returned', 'borrowed', 'borrowed_repaid'];
-  const { data: rows, error } = await supabase
+  const rows = await fetchAllPages((offset, pageSize) => supabase
     .from('transactions')
     .select('id, type, amount, person')
     .eq('user_id', userId)
-    .in('type', relevantTypes);
-  if (error) throw error;
+    .in('type', relevantTypes)
+    .order('created_at', { ascending: true })
+    .order('id', { ascending: true })
+    .range(offset, offset + pageSize - 1), METRICS_PAGE_SIZE);
+  return validateLedgerChange(rows, data, excludeId);
+}
 
-  const existing = (rows || []).find((row) => row.id === excludeId);
-  const candidateTransactions = (rows || []).filter((row) => row.id !== excludeId);
-  candidateTransactions.push(data);
-  const affected = new Map();
-  if (ledgerGroup(data.type) && data.person?.trim()) {
-    affected.set(
-      `${ledgerGroup(data.type)}:${data.person.trim().toLocaleLowerCase()}`,
-      { group: ledgerGroup(data.type), person: data.person },
-    );
-  }
-  if (existing) {
-    const group = ledgerGroup(existing.type);
-    if (group && existing.person?.trim()) {
-      affected.set(`${group}:${existing.person.trim().toLocaleLowerCase()}`, {
-        group,
-        person: existing.person,
-      });
-    }
-  }
-
-  const negativeBalance = findNegativeLentBorrowedBalance(candidateTransactions, [...affected.values()]);
-  if (negativeBalance) {
-    return {
-      success: false,
-      errors: [`This change exceeds ${negativeBalance.person}'s outstanding ${negativeBalance.group} balance.`],
-    };
-  }
-  return { success: true, errors: [] };
+async function getAllMetricRows(userId) {
+  return fetchAllPages((offset, pageSize) => supabase
+      .from('transactions')
+      .select('id, type, amount, person, category, transaction_date')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(offset, offset + pageSize - 1), METRICS_PAGE_SIZE);
 }
 
 function fromDb(row) {
@@ -135,11 +130,8 @@ function toDb(data, userId) {
 export const transactionService = {
   getDashboardData(userId) {
     return dedupeRequest(`dashboard:${userId}`, async () => {
-    const [metricsResult, recentResult] = await Promise.all([
-      supabase
-      .from('transactions')
-      .select('id, type, amount, person, category, transaction_date')
-      .eq('user_id', userId),
+    const [metricRows, recentResult] = await Promise.all([
+      getAllMetricRows(userId),
       supabase
         .from('transactions')
         .select(TRANSACTION_COLUMNS)
@@ -148,10 +140,9 @@ export const transactionService = {
         .limit(10),
     ]);
 
-    if (metricsResult.error) throw metricsResult.error;
     if (recentResult.error) throw recentResult.error;
 
-    const metricsRows = (metricsResult.data || []).map((row) => ({
+    const metricsRows = metricRows.map((row) => ({
       id: row.id,
       type: row.type,
       amount: Number(row.amount),
@@ -171,20 +162,21 @@ export const transactionService = {
     return dedupeRequest(`reports:${userId}:${month}:${previousMonth}`, async () => {
     const fetchMonth = (selectedMonth) => {
       const start = `${selectedMonth}-01`;
-      return supabase
+      return fetchAllPages((offset, pageSize) => supabase
         .from('transactions')
         .select('type, amount, category')
         .eq('user_id', userId)
         .gte('transaction_date', start)
-        .lte('transaction_date', getMonthEnd(selectedMonth));
+        .lte('transaction_date', getMonthEnd(selectedMonth))
+        .order('transaction_date', { ascending: true })
+        .order('id', { ascending: true })
+        .range(offset, offset + pageSize - 1), METRICS_PAGE_SIZE);
     };
 
-    const [currentResult, previousResult] = await Promise.all([
+    const [currentRows, previousRows] = await Promise.all([
       fetchMonth(month),
       fetchMonth(previousMonth),
     ]);
-    if (currentResult.error) throw currentResult.error;
-    if (previousResult.error) throw previousResult.error;
 
     const buildReport = (rows) => {
       const transactions = (rows || []).map((row) => ({
@@ -200,8 +192,8 @@ export const transactionService = {
     };
 
     return {
-      report: buildReport(currentResult.data),
-      previousReport: buildReport(previousResult.data),
+      report: buildReport(currentRows),
+      previousReport: buildReport(previousRows),
     };
     });
   },
@@ -271,7 +263,8 @@ export const transactionService = {
       invalidateUserQueries(userId);
       return { success: true, transaction: fromDb(row) };
     } catch (err) {
-      return { success: false, errors: [err.message || 'Failed to add transaction.'] };
+      console.error('Failed to add transaction:', err);
+      return { success: false, errors: ['Could not save the transaction. Check your connection and database permissions.'] };
     }
   },
 
@@ -295,26 +288,31 @@ export const transactionService = {
       invalidateUserQueries(userId);
       return { success: true, transaction: fromDb(row) };
     } catch (err) {
-      return { success: false, errors: [err.message || 'Failed to update transaction.'] };
+      console.error('Failed to update transaction:', err);
+      return { success: false, errors: ['Could not update the transaction. Check your connection and database permissions.'] };
     }
   },
 
   async delete(userId, id) {
     invalidateRequest(`dashboard:${userId}`);
     try {
-      const ledgerValidation = await validateLedgerBalance(userId, { type: '', amount: 0, person: '' }, id);
+      const ledgerValidation = await validateLedgerBalance(userId, null, id);
       if (!ledgerValidation.success) return ledgerValidation;
-      const { error } = await supabase
+      const { data: deleted, error } = await supabase
         .from('transactions')
         .delete()
         .eq('id', id)
-        .eq('user_id', userId);
+        .eq('user_id', userId)
+        .select('id')
+        .maybeSingle();
 
       if (error) throw error;
+      if (!deleted) return { success: false, errors: ['Transaction was not found or is no longer accessible.'] };
       invalidateUserQueries(userId);
       return { success: true };
     } catch (err) {
-      return { success: false, errors: [err.message || 'Failed to delete transaction.'] };
+      console.error('Failed to delete transaction:', err);
+      return { success: false, errors: ['Could not delete the transaction. Check your connection and database permissions.'] };
     }
   },
 
@@ -330,49 +328,11 @@ export const transactionService = {
   },
 
   calculateBalance(transactions) {
-    if (!Array.isArray(transactions)) return 0;
-    const balanceCents = transactions.reduce((sum, t) => {
-      return sum + getTransactionCashImpactCents(t);
-    }, 0);
-    return fromCents(balanceCents);
+    return calculateBalance(transactions);
   },
 
   getSummary(transactions) {
-    if (!Array.isArray(transactions)) {
-      return { balance: 0, totalIncome: 0, totalExpenses: 0, netLent: 0 };
-    }
-
-    let totalIncome = 0;
-    let totalExpenses = 0;
-    let totalLent = 0;
-    let totalLentReturned = 0;
-    let totalBorrowed = 0;
-    let totalBorrowedRepaid = 0;
-    let balance = 0;
-
-    transactions.forEach((t) => {
-      const amt = toCents(t.amount);
-      balance += getTransactionCashImpactCents(t);
-      switch (t.type) {
-        case 'income': totalIncome += amt; break;
-        case 'expense': totalExpenses += amt; break;
-        case 'lent': totalLent += amt; break;
-        case 'lent_returned': totalLentReturned += amt; break;
-        case 'borrowed': totalBorrowed += amt; break;
-        case 'borrowed_repaid': totalBorrowedRepaid += amt; break;
-      }
-    });
-
-    return {
-      balance: fromCents(balance),
-      totalIncome: fromCents(totalIncome),
-      totalExpenses: fromCents(totalExpenses),
-      netLent: fromCents(Math.max(0, totalLent - totalLentReturned)),
-      totalLent: fromCents(totalLent),
-      totalLentReturned: fromCents(totalLentReturned),
-      totalBorrowed: fromCents(totalBorrowed),
-      totalBorrowedRepaid: fromCents(totalBorrowedRepaid),
-    };
+    return getSummary(transactions);
   },
 
   getLentBorrowedLedger(transactions) {
@@ -380,27 +340,10 @@ export const transactionService = {
   },
 
   getCategoryBreakdown(transactions, month) {
-    const filtered = month
-      ? transactions.filter((t) => t.date && t.date.startsWith(month))
-      : transactions;
-
-    const map = {};
-    filtered.filter((t) => t.type === 'expense').forEach((t) => {
-      const cat = t.category || 'Other';
-      map[cat] = (map[cat] || 0) + (Number(t.amount) || 0);
-    });
-
-    return Object.entries(map)
-      .map(([category, amount]) => ({ category, amount }))
-      .sort((a, b) => b.amount - a.amount);
+    return getCategoryBreakdown(transactions, month);
   },
 
   getMonthlyReport(transactions, month) {
-    const filtered = transactions.filter((t) => t.date && t.date.startsWith(month));
-    return {
-      ...this.getSummary(filtered),
-      categoryBreakdown: this.getCategoryBreakdown(filtered, null),
-      transactionCount: filtered.length,
-    };
+    return getMonthlyReport(transactions, month);
   },
 };

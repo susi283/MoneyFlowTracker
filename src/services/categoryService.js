@@ -56,7 +56,11 @@ export const categoryService = {
       }
       return { success: true };
     } catch (err) {
-      return { success: false, error: err.message || 'Failed to add category.' };
+      console.error('Failed to add category:', err);
+      return {
+        success: false,
+        error: 'Unable to add the category. Check your connection and database permissions.',
+      };
     }
   },
 
@@ -85,7 +89,11 @@ export const categoryService = {
       if (error) throw error;
       return { success: true };
     } catch (err) {
-      return { success: false, error: err.message || 'Failed to remove category.' };
+      console.error('Failed to remove category:', err);
+      return {
+        success: false,
+        error: 'Unable to remove the category. Check your connection and database permissions.',
+      };
     }
   },
 };

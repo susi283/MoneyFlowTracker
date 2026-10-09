@@ -7,10 +7,12 @@ import RecentTransactions from '../components/RecentTransactions';
 import { transactionService } from '../services/transactionService';
 import { getCurrentMonth, getMonthName } from '../utils/helpers';
 
-export default function Dashboard({ transactions, metricsRows, availableMonths, summary, onAdd, onReset, categories }) {
+export default function Dashboard({ transactions, metricsRows, availableMonths, summary, onAdd, onReset, categories, loadError }) {
+  const [today] = useState(() => new Date());
   const [selectedMonth, setSelectedMonth] = useState(getCurrentMonth());
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [resetError, setResetError] = useState('');
+  const [resetting, setResetting] = useState(false);
 
   const months = [...availableMonths];
   if (!months.includes(selectedMonth)) months.unshift(selectedMonth);
@@ -21,6 +23,8 @@ export default function Dashboard({ transactions, metricsRows, availableMonths, 
   );
 
   async function handleReset() {
+    if (resetting) return;
+    setResetting(true);
     setResetError('');
     try {
       await onReset?.();
@@ -28,6 +32,8 @@ export default function Dashboard({ transactions, metricsRows, availableMonths, 
     } catch (error) {
       console.error('Failed to reset transactions:', error);
       setResetError('Unable to reset transactions. Please try again.');
+    } finally {
+      setResetting(false);
     }
   }
 
@@ -38,7 +44,7 @@ export default function Dashboard({ transactions, metricsRows, availableMonths, 
         <h1 className="page-title">Dashboard</h1>
         <div className="flex items-center gap-2">
           <p className="text-sm text-slate-400 hidden sm:block">
-            {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+            {today.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
           </p>
           {/* Reset Button */}
           <button
@@ -53,6 +59,7 @@ export default function Dashboard({ transactions, metricsRows, availableMonths, 
       </div>
 
       {/* Summary Cards */}
+      {loadError && <p role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-xl p-3">{loadError}</p>}
       <SummaryCards summary={summary} />
 
       {/* Smart Input */}
@@ -99,9 +106,10 @@ export default function Dashboard({ transactions, metricsRows, availableMonths, 
             <div className="flex gap-3">
               <button
                 onClick={handleReset}
+                disabled={resetting}
                 className="flex-1 bg-red-500 hover:bg-red-600 text-white font-semibold py-3 px-4 rounded-xl transition-colors"
               >
-                Yes, Clear All
+                {resetting ? 'Clearing...' : 'Yes, Clear All'}
               </button>
               <button
                 onClick={() => setShowResetConfirm(false)}

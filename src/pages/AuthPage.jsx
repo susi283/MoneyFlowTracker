@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Mail, Lock, LogIn, UserPlus, Loader2, Eye, EyeOff, ArrowRight, KeyRound } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
-export default function AuthPage({ initialMode = 'login', onRecoveryComplete }) {
+export default function AuthPage({ initialMode = 'login', initialError = '', onRecoveryComplete }) {
   const [mode, setMode] = useState(initialMode);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -10,7 +10,7 @@ export default function AuthPage({ initialMode = 'login', onRecoveryComplete }) 
   const [name, setName] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
+  const [error, setError] = useState(initialError);
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
 

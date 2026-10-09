@@ -1,7 +1,7 @@
-import { generateId } from '../utils/helpers';
+import { getTodayStr } from '../utils/helpers';
 
 const today = new Date();
-const fmt = (d) => d.toISOString().split('T')[0];
+const fmt = getTodayStr;
 
 function daysAgo(n) {
   const d = new Date(today);

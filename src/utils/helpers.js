@@ -28,8 +28,11 @@ export function formatDate(dateStr) {
 }
 
 // Get today's date as YYYY-MM-DD string
-export function getTodayStr() {
-  return new Date().toISOString().split('T')[0];
+export function getTodayStr(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 // Get YYYY-MM from a date string
@@ -62,8 +65,13 @@ export function getCurrentMonth() {
 
 // Validate amount
 export function isValidAmount(val) {
-  const n = parseFloat(val);
-  return !isNaN(n) && n > 0;
+  const n = Number(val);
+  const cents = Math.round(n * 100);
+  return Number.isFinite(n)
+    && Number.isSafeInteger(cents)
+    && n > 0
+    && cents > 0
+    && Math.abs(n * 100 - cents) < 1e-7;
 }
 
 // Capitalize first letter

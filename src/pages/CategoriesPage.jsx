@@ -11,10 +11,16 @@ function CategorySection({ title, items, onAdd, onRemove, color }) {
     e.preventDefault();
     setError('');
     setBusy(true);
-    const result = await onAdd(newCat);
-    setBusy(false);
-    if (result.success) setNewCat('');
-    else setError(result.error || 'Failed to add.');
+    try {
+      const result = await onAdd(newCat);
+      if (result.success) setNewCat('');
+      else setError(result.error || 'Failed to add.');
+    } catch (err) {
+      console.error('Failed to add category:', err);
+      setError('Unable to add the category. Check your connection and try again.');
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -26,8 +32,13 @@ function CategorySection({ title, items, onAdd, onRemove, color }) {
             {cat}
             <button
               onClick={async () => {
-                const result = await onRemove(cat);
-                if (!result?.success && result?.error) setError(result.error);
+                try {
+                  const result = await onRemove(cat);
+                  if (!result?.success) setError(result?.error || 'Unable to remove the category.');
+                } catch (err) {
+                  console.error('Failed to remove category:', err);
+                  setError('Unable to remove the category. Check your connection and try again.');
+                }
               }}
               className="ml-1 hover:opacity-70 transition-opacity"
               title="Remove"
@@ -49,7 +60,7 @@ function CategorySection({ title, items, onAdd, onRemove, color }) {
   );
 }
 
-export default function CategoriesPage({ userId, categories, onCategoriesChange }) {
+export default function CategoriesPage({ userId, categories, loadError, onCategoriesChange }) {
   const cats = categories || { expense: [], income: [] };
 
   function updateCategories(updated) {
@@ -87,6 +98,7 @@ export default function CategoriesPage({ userId, categories, onCategoriesChange 
   return (
     <div className="space-y-6">
       <h1 className="page-title">Categories</h1>
+      {loadError && <p role="alert" className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-xl p-3">{loadError}</p>}
       <CategorySection title="Expense Categories" items={cats.expense || []} onAdd={addExpense} onRemove={removeExpense} color="bg-red-50 text-red-700 border-red-200" />
       <CategorySection title="Income Categories" items={cats.income || []} onAdd={addIncome} onRemove={removeIncome} color="bg-emerald-50 text-emerald-700 border-emerald-200" />
     </div>

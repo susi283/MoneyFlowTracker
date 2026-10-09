@@ -26,6 +26,7 @@ export default function TransactionForm({ categories, onSubmit, onCancel, initia
     status: initial?.status || 'completed',
   });
   const [errors, setErrors] = useState([]);
+  const [submitting, setSubmitting] = useState(false);
 
   const needsPerson = PERSON_TYPES.includes(form.type);
   const isIncome = form.type === 'income';
@@ -60,14 +61,22 @@ export default function TransactionForm({ categories, onSubmit, onCancel, initia
       return;
     }
 
-    const result = await onSubmit({
-      ...form,
-      amount: Number(form.amount),
-      category: form.category || 'Other',
-    });
+    setSubmitting(true);
+    try {
+      const result = await onSubmit({
+        ...form,
+        amount: Number(form.amount),
+        category: form.category || 'Other',
+      });
 
-    if (result && !result.success && result.errors) {
-      setErrors(result.errors);
+      if (result && !result.success) {
+        setErrors(result.errors || ['Unable to save this transaction. Please try again.']);
+      }
+    } catch (error) {
+      console.error('Failed to submit transaction form:', error);
+      setErrors(['Unable to save this transaction. Check your connection and try again.']);
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -181,8 +190,8 @@ export default function TransactionForm({ categories, onSubmit, onCancel, initia
       </div>
 
       <div className="flex gap-3 pt-2">
-        <button type="submit" className="btn-primary">
-          {initial ? 'Update Transaction' : 'Add Transaction'}
+        <button type="submit" className="btn-primary" disabled={submitting}>
+          {submitting ? 'Saving...' : initial ? 'Update Transaction' : 'Add Transaction'}
         </button>
         {onCancel && (
           <button type="button" onClick={onCancel} className="btn-secondary">
